@@ -1,37 +1,12 @@
-################################################################################
-#
-#  Permission is hereby granted, free of charge, to any person obtaining a
-#  copy of this software and associated documentation files (the "Software"),
-#  to deal in the Software without restriction, including without limitation
-#  the rights to use, copy, modify, merge, publish, distribute, sublicense,
-#  and/or sell copies of the Software, and to permit persons to whom the
-#  Software is furnished to do so, subject to the following conditions:
-#
-#  The above copyright notice and this permission notice shall be included in
-#  all copies or substantial portions of the Software.
-#
-#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-#  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-#  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-#  DEALINGS IN THE SOFTWARE.
-
-# from itertools import izip
-from random import normalvariate, random
-from datetime import timedelta, datetime
-
+import os
 import csv
-import dateutil.parser
-import os.path
-
-import operator
 import json
 import re
 import threading
-
-# from BaseHTTPServer import BaseHTTPRequestHandler,HTTPServer
+import operator
+from random import normalvariate, random
+from datetime import timedelta, datetime
+import dateutil.parser
 import http.server
 from socketserver import ThreadingMixIn
 
@@ -54,7 +29,6 @@ FREQ = (12, 36, 50)
 # Trades
 
 OVERLAP = 4
-
 
 ################################################################################
 #
@@ -87,7 +61,6 @@ def orders(hist):
         order = round(normalvariate(px + (spd / d), spd / OVERLAP), 2)
         size = int(abs(normalvariate(0, 100)))
         yield t, stock, side, order, size
-
 
 ################################################################################
 #
@@ -143,14 +116,13 @@ def order_book(orders, book, stock_name):
         bids, asks = clear_book(**book)
         yield t, bids, asks
 
-
 ################################################################################
 #
 # Test Data Persistence
 
 def generate_csv():
     """ Generate a CSV of order history. """
-    with open('test.csv', 'wb') as f:
+    with open('test.csv', 'w', newline='') as f:
         writer = csv.writer(f)
         for t, stock, side, order, size in orders(market()):
             if t > MARKET_OPEN + SIM_LENGTH:
@@ -159,11 +131,10 @@ def generate_csv():
 
 
 def read_csv():
-    """ Read a CSV or order history into a list. """
-    with open('test.csv', 'rt') as f:
+    """ Read a CSV of order history into a list. """
+    with open('test.csv', 'r') as f:
         for time, stock, side, order, size in csv.reader(f):
             yield dateutil.parser.parse(time), stock, side, float(order), int(size)
-
 
 ################################################################################
 #
@@ -201,6 +172,7 @@ def read_params(path):
     if len(query) > 1:
         query = query[1].split('&')
         return dict(map(lambda x: x.split('='), query))
+    return {}
 
 
 def get(req_handler, routes):
@@ -216,7 +188,6 @@ def get(req_handler, routes):
                 data = json.dumps(handler(routes, params)) + '\n'
                 req_handler.wfile.write(bytes(data, encoding='utf-8'))
                 return
-
 
 def run(routes, host='0.0.0.0', port=8080):
     """ Runs a class as a server whose methods have been decorated with
@@ -235,13 +206,13 @@ def run(routes, host='0.0.0.0', port=8080):
     thread.daemon = True
     thread.start()
     print('HTTP server started on port 8080')
-    while True:
-        from time import sleep
-        sleep(1)
-    server.shutdown()
-    server.start()
-    server.waitForThread()
-
+    try:
+        while True:
+            from time import sleep
+            sleep(1)
+    except KeyboardInterrupt:
+        server.shutdown()
+        thread.join()
 
 ################################################################################
 #
@@ -257,13 +228,16 @@ class App(object):
     """ The trading game server application. """
 
     def __init__(self):
-        self._book_1 = dict()
-        self._book_2 = dict()
-        self._data_1 = order_book(read_csv(), self._book_1, 'ABC')
-        self._data_2 = order_book(read_csv(), self._book_2, 'DEF')
-        self._rt_start = datetime.now()
-        self._sim_start, _, _ = next(self._data_1)
-        self.read_10_first_lines()
+        try:
+            self._book_1 = dict()
+            self._book_2 = dict()
+            self._data_1 = order_book(read_csv(), self._book_1, 'ABC')
+            self._data_2 = order_book(read_csv(), self._book_2, 'DEF')
+            self._rt_start = datetime.now()
+            self._sim_start, _, _ = next(self._data_1)
+            self.read_10_first_lines()
+        except StopIteration as e:
+            print("Error initializing order books. Check CSV data. Exception:", e)
 
     @property
     def _current_book_1(self):
@@ -285,8 +259,11 @@ class App(object):
 
     def read_10_first_lines(self):
         for _ in iter(range(10)):
-            next(self._data_1)
-            next(self._data_2)
+            try:
+                next(self._data_1)
+                next(self._data_2)
+            except StopIteration:
+                print("Insufficient data in CSV for initial reading.")
 
     @route('/query')
     def handle_query(self, x):
@@ -297,7 +274,7 @@ class App(object):
             t1, bids1, asks1 = next(self._current_book_1)
             t2, bids2, asks2 = next(self._current_book_2)
         except Exception as e:
-            print("error getting stocks...reinitalizing app")
+            print("Error getting stocks...reinitializing app. Exception:", e)
             self.__init__()
             t1, bids1, asks1 = next(self._current_book_1)
             t2, bids2, asks2 = next(self._current_book_2)
